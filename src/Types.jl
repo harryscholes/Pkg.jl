@@ -173,16 +173,10 @@ end
 function PackageSpec(;name::AbstractString="", uuid::Union{String, UUID}=UUID(0),
                      version::Union{VersionNumber, String, VersionSpec} = VersionSpec(),
                      url = nothing, rev = nothing, path=nothing, mode::PackageMode = PKGMODE_PROJECT)
-    if url !== nothing || path !== nothing || rev !== nothing
-        if path !== nothing || url !== nothing
-            path !== nothing && url !== nothing && pkgerror("cannot specify both path and url")
-            url = url == nothing ? path : url
-        end
-        repo = GitRepo(url=url, rev=rev)
-    else
-        repo = nothing
-    end
-
+    path !== nothing && url !== nothing && pkgerror("cannot specify both a path and url")
+    repo = (url === nothing && path === nothing && rev === nothing) ?
+        nothing :
+        GitRepo(rev = rev, url = url === nothing ? path : url)
     version = VersionSpec(version)
     uuid isa String && (uuid = UUID(uuid))
     PackageSpec(name, uuid, version, mode, nothing, PKGSPEC_NOTHING, repo)
@@ -411,24 +405,18 @@ Base.@kwdef mutable struct Context
     old_pkg2_clone_name::String = ""
 end
 
-function Context!(kw_context::Vector{Pair{Symbol,Any}})::Context
-    ctx = Context()
-    for (k, v) in kw_context
+Context!(kw_context::Vector{Pair{Symbol,Any}})::Context =
+    Context!(Context(); kw_context...)
+function Context!(ctx::Context; kwargs...)
+    for (k, v) in kwargs
         setfield!(ctx, k, v)
     end
     return ctx
 end
 
-function Context!(ctx::Context; kwargs...)
-    for (k, v) in kwargs
-        setfield!(ctx, k, v)
-    end
-end
-
 # target === nothing : main dependencies
 # target === "*"     : main + all extras
 # target === "name"  : named target deps
-
 function deps_names(project::Project, target::Union{Nothing,String}=nothing)::Vector{String}
     deps = collect(keys(project.deps))
     if target === nothing
@@ -462,11 +450,7 @@ get_deps(ctx::Context, target::Union{Nothing,String}=nothing) =
 
 function project_compatibility(ctx::Context, name::String)
     compat = get(ctx.env.project.compat, name, nothing)
-    if compat === nothing
-        return VersionSpec()
-    else
-        return VersionSpec(semver_spec(compat))
-    end
+    return compat === nothing ? VersionSpec() : VersionSpec(semver_spec(compat))
 end
 
 function write_env_usage(manifest_file::AbstractString)
@@ -746,7 +730,7 @@ end
 function handle_repos_develop!(ctx::Context, pkgs::AbstractVector{PackageSpec}; shared::Bool)
     for pkg in pkgs
         pkg.repo === nothing && (pkg.repo = Types.GitRepo())
-        !isempty(pkg.repo.rev) && pkgerror("git revision cannot be given to `develop`")
+        pkg.repo.rev === nothing && pkgerror("git revision cannot be given to `develop`")
     end
     
     new_uuids = UUID[]
@@ -962,6 +946,7 @@ end
 function project_deps_resolve!(env::EnvCache, pkgs::AbstractVector{PackageSpec})
     uuids = env.project.deps
     names = Dict(uuid => name for (name, uuid) in uuids)
+    # TODO: move this to `Project`
     length(uuids) < length(names) && # TODO: handle this somehow?
         pkgerror("duplicate UUID found in project file's [deps] section")
     for pkg in pkgs

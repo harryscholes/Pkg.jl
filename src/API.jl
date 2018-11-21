@@ -35,15 +35,14 @@ function add_or_develop(ctx::Context, pkgs::Vector{PackageSpec}; mode::Symbol, s
 
     # if julia is passed as a package the solver gets tricked;
     # this catches the error early on
-    any(pkg->(pkg.name == "julia"), pkgs) &&
+    any(pkg -> (pkg.name == "julia"), pkgs) &&
         pkgerror("Trying to $mode julia as a package")
 
     ctx.preview && preview_info()
-    if mode == :develop
-        new_git = handle_repos_develop!(ctx, pkgs, shared = shared)
-    else
-        new_git = handle_repos_add!(ctx, pkgs; upgrade_or_add=true)
-    end
+    new_git = mode == :develop ?
+        handle_repos_develop!(ctx, pkgs, shared) :
+        handle_repos_add!(ctx, pkgs; upgrade_or_add=true)
+
     project_deps_resolve!(ctx.env, pkgs)
     registry_resolve!(ctx.env, pkgs)
     stdlib_resolve!(ctx, pkgs)
