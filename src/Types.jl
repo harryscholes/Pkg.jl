@@ -133,17 +133,14 @@ Base.show(io::IO, err::PkgError) = print(io, err.msg)
 const VersionTypes = Union{VersionNumber,VersionSpec,UpgradeLevel}
 
 # The url field can also be a local path, rename?
-mutable struct GitRepo
-    url::String
-    rev::String
-    git_tree_sha1::Union{Nothing,SHA1}
+Base.@kwdef mutable struct GitRepo
+    url::Union{Nothing,String} = nothing
+    rev::Union{Nothing,String} = nothing
+    tree_sha::Union{Nothing,SHA1} = nothing # git tree sha1
 end
 
-GitRepo(url::String, revspec) = GitRepo(url, revspec, nothing)
-GitRepo(url::String) = GitRepo(url, "", nothing)
-GitRepo(;url::Union{String, Nothing}=nothing, rev::Union{String, Nothing} =nothing) =
-    GitRepo(url == nothing ? "" : url, rev == nothing ? "" : rev, nothing)
-Base.:(==)(repo1::GitRepo, repo2::GitRepo) = (repo1.url == repo2.url && repo1.rev == repo2.rev && repo1.git_tree_sha1 == repo2.git_tree_sha1)
+Base.:(==)(r1::GitRepo, r2::GitRepo) =
+    r1.url == r2.url && r1.rev == r2.rev && r1.tree_sha == r2.tree_sha
 
 mutable struct PackageSpec
     name::String
@@ -189,10 +186,10 @@ function Base.show(io::IO, pkg::PackageSpec)
     vstr = repr(pkg.version)
     f = ["name" => pkg.name, "uuid" => has_uuid(pkg) ? pkg.uuid : "", "v" => (vstr == "VersionSpec(\"*\")" ? "" : vstr)]
     if pkg.repo !== nothing
-        if !isempty(pkg.repo.url)
+        if pkg.repo.url !== nothing
             push!(f, "url/path" => string("\"", pkg.repo.url, "\""))
         end
-        if !isempty(pkg.repo.rev)
+        if pkg.repo.rev !== nothing
             push!(f, "rev" => pkg.repo.rev)
         end
     end
@@ -269,15 +266,13 @@ Base.@kwdef mutable struct Project
 end
 
 Base.@kwdef mutable struct PackageEntry
-    name::Union{String, Nothing} = nothing
-    version::Union{String, Nothing} = nothing
-    path::Union{String, Nothing} = nothing
-    git_tree_sha::Union{SHA1, Nothing} = nothing
+    name::Union{String,Nothing} = nothing
+    version::Union{String,Nothing} = nothing
+    path::Union{String,Nothing} = nothing
     pinned::Bool = false
-    repo_url::Union{String, Nothing} = nothing
-    repo_rev::Union{String, Nothing} = nothing
+    repo::Union{GitRepo} = GitRepo()
     deps::Dict{String,UUID} = Dict{String,UUID}()
-    other::Union{Dict, Nothing} = nothing
+    other::Union{Dict,Nothing} = nothing
 end
 const Manifest = Dict{UUID,PackageEntry}
 
@@ -285,9 +280,7 @@ function PackageSpec(entry::PackageEntry)
     pkg = PackageSpec()
     pkg.name = entry.name
     pkg.path = entry.path
-    if entry.repo_url !== nothing
-        pkg.repo = GitRepo(entry.repo_url, entry.repo_rev)
-    end
+    entry.repo.url !== nothing && (pkg.repo = entry.repo)
     entry.version !== nothing && (pkg.version = VersionNumber(entry.version))
     return pkg
 end
@@ -572,13 +565,11 @@ function Manifest(raw::Dict)::Manifest
         entry.name     = name
         entry.version  = get(info, "version",  nothing)
         entry.path     = get(info, "path",     nothing)
-        entry.repo_url = get(info, "repo-url", nothing)
-        entry.repo_rev = get(info, "repo-rev", nothing)
         entry.pinned   = parse(Bool, get(info, "pinned", "false"))
-        git_tree_sha   = get(info, "git-tree-sha1", nothing)
-        if git_tree_sha !== nothing
-            entry.git_tree_sha = SHA1(git_tree_sha)
-        end
+        entry.repo.url = get(info, "repo-url", nothing)
+        entry.repo.rev = get(info, "repo-rev", nothing)
+        sha = get(info, "git-tree-sha1", nothing)
+        sha !== nothing && (entry.repo.tree_sha = SHA1(sha))
         deps = get(info, "deps", nothing)
         if deps !== nothing
             if deps isa AbstractVector
@@ -730,7 +721,7 @@ end
 function handle_repos_develop!(ctx::Context, pkgs::AbstractVector{PackageSpec}; shared::Bool)
     for pkg in pkgs
         pkg.repo === nothing && (pkg.repo = Types.GitRepo())
-        pkg.repo.rev === nothing && pkgerror("git revision cannot be given to `develop`")
+        pkg.repo.rev === nothing || pkgerror("git revision cannot be given to `develop`")
     end
     
     new_uuids = UUID[]
@@ -762,7 +753,7 @@ function handle_repos_add!(ctx::Context, pkgs::AbstractVector{PackageSpec};
         for pkg in pkgs
             pkg.repo == nothing && continue
             pkg.special_action = PKGSPEC_REPO_ADDED
-            isempty(pkg.repo.url) && set_repo_for_pkg!(env, pkg)
+            pkg.repo.url === nothing && set_repo_for_pkg!(env, pkg)
             clones_dir = joinpath(depots1(), "clones")
             mkpath(clones_dir)
             repo_path = joinpath(clones_dir, string(hash(pkg.repo.url)))
@@ -779,16 +770,14 @@ function handle_repos_add!(ctx::Context, pkgs::AbstractVector{PackageSpec};
                     GitTools.fetch(repo; refspecs=refspecs, credentials=creds)
                     rev = pkg.repo.rev
                     # see if we can get rev as a branch
-                    if isempty(rev)
-                        if LibGit2.isattached(repo)
-                            rev = LibGit2.branch(repo)
-                        else
-                            rev = string(LibGit2.GitHash(LibGit2.head(repo)))
-                        end
+                    if rev === nothing
+                        rev = LibGit2.isattached(repo) ?
+                            LibGit2.branch(repo) :
+                            string(LibGit2.GitHash(LibGit2.head(repo)))
                     end
                 else
                     # Not upgrading so the rev should be the current git-tree-sha
-                    rev = entry.git_tree_sha
+                    rev = entry.repo.tree_sha
                     pkg.version = VersionNumber(entry.version)
                 end
 
@@ -800,16 +789,15 @@ function handle_repos_add!(ctx::Context, pkgs::AbstractVector{PackageSpec};
                     end
                     LibGit2.with(LibGit2.peel(LibGit2.GitTree, gitobject)) do git_tree
                         @assert git_tree isa LibGit2.GitTree
-                        pkg.repo.git_tree_sha1 = SHA1(string(LibGit2.GitHash(git_tree)))
+                        pkg.repo.tree_sha = SHA1(string(LibGit2.GitHash(git_tree)))
                             version_path = nothing
                             folder_already_downloaded = false
                         if has_uuid(pkg) && has_name(pkg)
-                            version_path = Pkg.Operations.find_installed(pkg.name, pkg.uuid, pkg.repo.git_tree_sha1)
+                            version_path = Pkg.Operations.find_installed(pkg.name, pkg.uuid, pkg.repo.tree_sha)
                             isdir(version_path) && (folder_already_downloaded = true)
                             entry = manifest_info(env, pkg.uuid)
                             if entry !== nothing &&
-                                entry.git_tree_sha == pkg.repo.git_tree_sha1 &&
-                                folder_already_downloaded
+                                entry.repo.tree_sha == pkg.repo.tree_sha && folder_already_downloaded
                                 # Same tree sha and this version already downloaded, nothing left to do
                                 do_nothing_more = true
                             end
@@ -837,7 +825,7 @@ function handle_repos_add!(ctx::Context, pkgs::AbstractVector{PackageSpec};
             do_nothing_more && continue
             parse_package!(ctx, pkg, project_path)
             if !folder_already_downloaded
-                version_path = Pkg.Operations.find_installed(pkg.name, pkg.uuid, pkg.repo.git_tree_sha1)
+                version_path = Pkg.Operations.find_installed(pkg.name, pkg.uuid, pkg.repo.tree_sha)
                 mkpath(version_path)
                 mv(project_path, version_path; force=true)
                 push!(new_uuids, pkg.uuid)
@@ -1540,11 +1528,11 @@ function destructure(manifest::Manifest)::Dict
         new_entry = something(entry.other, Dict{String,Any}())
         new_entry["uuid"] = string(uuid)
         entry!(new_entry, "version", entry.version, nothing)
-        entry!(new_entry, "git-tree-sha1", entry.git_tree_sha, nothing)
+        entry!(new_entry, "git-tree-sha1", entry.repo.tree_sha, nothing)
         entry!(new_entry, "pinned", entry.pinned, false)
         entry!(new_entry, "path", entry.path, nothing)
-        entry!(new_entry, "repo-url", entry.repo_url, nothing)
-        entry!(new_entry, "repo-rev", entry.repo_rev, nothing)
+        entry!(new_entry, "repo-url", entry.repo.url, nothing)
+        entry!(new_entry, "repo-rev", entry.repo.rev, nothing)
         if isempty(entry.deps)
             delete!(new_entry, "deps")
         else

@@ -100,11 +100,10 @@ temp_pkg_dir(;rm=false) do project_path; cd(project_path) do;
 
     # Test upgrade --fixed doesn't change the tracking (https://github.com/JuliaLang/Pkg.jl/issues/434)
     entry = Pkg.Types.manifest_info(Pkg.Types.EnvCache(), TEST_PKG.uuid)
-    @test entry.repo_rev == "master"
+    @test entry.repo.rev == "master"
     pkg"up --fixed"
     entry = Pkg.Types.manifest_info(Pkg.Types.EnvCache(), TEST_PKG.uuid)
-    @test entry.repo_rev == "master"
-
+    @test entry.repo.rev == "master"
 
     pkg"test Example"
     @test isinstalled(TEST_PKG)

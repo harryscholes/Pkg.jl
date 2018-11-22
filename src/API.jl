@@ -451,11 +451,8 @@ function instantiate(ctx::Context; manifest::Union{Bool, Nothing}=nothing, kwarg
         pkg.uuid in keys(ctx.stdlibs) && continue
         pkg.path !== nothing && continue
         urls[pkg.uuid] = String[]
-        hashes[pkg.uuid] = entry.git_tree_sha
-
-        if entry.repo_url !== nothing
-            pkg.repo = Types.GitRepo(entry.repo_url, entry.repo_rev, entry.git_tree_sha)
-        end
+        hashes[pkg.uuid] = entry.repo.tree_sha
+        entry.repo.url !== nothing && (pkg.repo = entry.repo)
     end
     _, urls_ref = Operations.version_data!(ctx, pkgs)
     for (uuid, url) in urls_ref
