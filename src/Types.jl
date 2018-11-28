@@ -55,8 +55,7 @@ const uuid_julia = uuid5(uuid_package, "julia")
 
 ## user-friendly representation of package IDs ##
 function pkgID(p::UUID, uuid_to_name::Dict{UUID,String})
-    name = get(uuid_to_name, p, "")
-    isempty(name) && (name = "(unknown)")
+    name = get(uuid_to_name, p, "(unknown)")
     uuid_short = string(p)[1:8]
     return "$name [$uuid_short]"
 end
@@ -142,45 +141,43 @@ end
 Base.:(==)(r1::GitRepo, r2::GitRepo) =
     r1.url == r2.url && r1.rev == r2.rev && r1.tree_sha == r2.tree_sha
 
-mutable struct PackageSpec
-    name::String
-    uuid::UUID
-    version::VersionTypes
-    mode::PackageMode
-    path::Union{Nothing,String}
-    special_action::PackageSpecialAction # If the package is currently being pinned, freed etc
-    repo::Union{Nothing,GitRepo}
+Base.@kwdef mutable struct PackageSpec
+    name::Union{Nothing,String} = nothing
+    uuid::Union{Nothing,UUID} = nothing
+    version::VersionTypes = VersionSpec()
+    mode::PackageMode = PKGMODE_PROJECT
+    path::Union{Nothing,String} = nothing
+    special_action::PackageSpecialAction = PKGSPEC_NOTHING # If the package is currently being pinned, freed etc
+    repo::Union{Nothing,GitRepo} = nothing
 end
-PackageSpec(name::AbstractString, uuid::UUID, version::VersionTypes,
-            mode::PackageMode=PKGMODE_PROJECT, path=nothing, special_action=PKGSPEC_NOTHING,
-            repo=nothing) = PackageSpec(String(name), uuid, version, mode, path, special_action, repo)
-PackageSpec(name::AbstractString, uuid::UUID) =
-    PackageSpec(name, uuid, VersionSpec())
-PackageSpec(name::AbstractString, version::VersionTypes=VersionSpec()) =
-    PackageSpec(name, UUID(zero(UInt128)), version)
-PackageSpec(uuid::UUID, version::VersionTypes=VersionSpec()) =
-    PackageSpec("", uuid, version)
-function PackageSpec(repo::GitRepo)
-    pkg = PackageSpec()
-    pkg.repo = repo
-    return pkg
-end
+PackageSpec(name::AbstractString) = PackageSpec(;name=name)
+PackageSpec(name::AbstractString, uuid::UUID) = PackageSpec(;name=name, uuid=uuid)
+PackageSpec(name::AbstractString, version::VersionTypes) = PackageSpec(;name=name, version=version)
+PackageSpec(n::AbstractString, u::UUID, v::VersionTypes) = PackageSpec(;name=n, uuid=u, version=v)
 
-# kwarg constructor
-function PackageSpec(;name::AbstractString="", uuid::Union{String, UUID}=UUID(0),
-                     version::Union{VersionNumber, String, VersionSpec} = VersionSpec(),
-                     url = nothing, rev = nothing, path=nothing, mode::PackageMode = PKGMODE_PROJECT)
-    path !== nothing && url !== nothing && pkgerror("cannot specify both a path and url")
+# API constructor
+function Package(;name::Union{Nothing,AbstractString} = nothing,
+                  uuid::Union{Nothing,String,UUID} = nothing,
+                  version::Union{VersionNumber, String, VersionSpec, Nothing} = nothing,
+                  url = nothing, rev = nothing, path=nothing, mode::PackageMode = PKGMODE_PROJECT)
+    path !== nothing && url !== nothing &&
+        pkgerror("cannot specify both a path and url")
+    url !== nothing && version !== nothing &&
+        pkgerror("`version` can not be given with `url`, use `rev` instead")
     repo = (url === nothing && path === nothing && rev === nothing) ?
         nothing :
-        GitRepo(rev = rev, url = url === nothing ? path : url)
-    version = VersionSpec(version)
+        GitRepo(rev = rev, url = url !== nothing ? url : path)
+    version = version === nothing ? VersionSpec() : VersionSpec(version)
     uuid isa String && (uuid = UUID(uuid))
     PackageSpec(name, uuid, version, mode, nothing, PKGSPEC_NOTHING, repo)
 end
+Package(name::AbstractString) = PackageSpec(;name=name)
+Package(name::AbstractString, uuid::UUID) = PackageSpec(;name=name, uuid=uuid)
+Package(name::AbstractString, uuid::UUID, version::VersionTypes) = PackageSpec(name, uuid, version)
 
-has_name(pkg::PackageSpec) = !isempty(pkg.name)
-has_uuid(pkg::PackageSpec) = pkg.uuid != UUID(zero(UInt128))
+
+has_name(pkg::PackageSpec) = pkg.name !== nothing
+has_uuid(pkg::PackageSpec) = pkg.uuid !== nothing
 
 function Base.show(io::IO, pkg::PackageSpec)
     vstr = repr(pkg.version)
@@ -270,20 +267,11 @@ Base.@kwdef mutable struct PackageEntry
     version::Union{String,Nothing} = nothing
     path::Union{String,Nothing} = nothing
     pinned::Bool = false
-    repo::Union{GitRepo} = GitRepo()
+    repo::GitRepo = GitRepo()
     deps::Dict{String,UUID} = Dict{String,UUID}()
     other::Union{Dict,Nothing} = nothing
 end
 const Manifest = Dict{UUID,PackageEntry}
-
-function PackageSpec(entry::PackageEntry)
-    pkg = PackageSpec()
-    pkg.name = entry.name
-    pkg.path = entry.path
-    entry.repo.url !== nothing && (pkg.repo = entry.repo)
-    entry.version !== nothing && (pkg.version = VersionNumber(entry.version))
-    return pkg
-end
 
 mutable struct EnvCache
     # environment info:
@@ -316,9 +304,9 @@ function EnvCache(env::Union{Nothing,String}=nothing)
     # initiaze project package
     if any(x -> x !== nothing, [project.name, project.uuid, project.version])
         project_package = PackageSpec(
-            something(project.name, ""),
-            something(project.uuid, UUID(0)),
-            something(project.version, VersionNumber("0.0")),
+            name = project.name,
+            uuid = project.uuid,
+            version = something(project.version, VersionNumber("0.0")),
         )
     else
         project_package = nothing
@@ -710,7 +698,7 @@ function remote_dev_path!(ctx::Context, pkg::PackageSpec, shared::Bool)
     UPDATED_REGISTRY_THIS_SESSION[] || update_registries(ctx)
     # We save the repo in case another environement wants to develop from the same repo,
     # this avoids having to reclone it from scratch.
-    isempty(pkg.repo.url) && set_repo_for_pkg!(ctx.env, pkg)
+    pkg.repo.url === nothing && set_repo_for_pkg!(ctx.env, pkg)
     temp_clone = fresh_clone(pkg)
     # parse repo to determine dev path
     parse_package!(ctx, pkg, temp_clone)
@@ -718,7 +706,7 @@ function remote_dev_path!(ctx::Context, pkg::PackageSpec, shared::Bool)
     return pkg.uuid
 end
 
-function handle_repos_develop!(ctx::Context, pkgs::AbstractVector{PackageSpec}; shared::Bool)
+function handle_repos_develop!(ctx::Context, pkgs::AbstractVector{PackageSpec}, shared::Bool)
     for pkg in pkgs
         pkg.repo === nothing && (pkg.repo = Types.GitRepo())
         pkg.repo.rev === nothing || pkgerror("git revision cannot be given to `develop`")
@@ -727,9 +715,9 @@ function handle_repos_develop!(ctx::Context, pkgs::AbstractVector{PackageSpec}; 
     new_uuids = UUID[]
     for pkg in pkgs
         pkg.special_action = PKGSPEC_DEVELOPED
-        if !isempty(pkg.repo.url) && isdir_windows_workaround(pkg.repo.url)
+        if pkg.repo.url !== nothing && isdir_windows_workaround(pkg.repo.url)
             explicit_dev_path(ctx, pkg)
-        elseif !isempty(pkg.name)
+        elseif pkg.name !== nothing
             canonical_dev_path!(ctx, pkg, shared)
         end
         if pkg.path === nothing
@@ -974,8 +962,8 @@ function registry_resolve!(env::EnvCache, pkgs::AbstractVector{PackageSpec})
     # if there are no half-specified packages, return early
     any(pkg -> has_name(pkg) ⊻ has_uuid(pkg), pkgs) || return
     # collect all names and uuids since we're looking anyway
-    names = [pkg.name for pkg in pkgs if has_name(pkg)]
-    uuids = [pkg.uuid for pkg in pkgs if has_uuid(pkg)]
+    names = String[pkg.name for pkg in pkgs if has_name(pkg)]
+    uuids = UUID[pkg.uuid for pkg in pkgs if has_uuid(pkg)]
     find_registered!(env, names, uuids)
     for pkg in pkgs
         @assert has_name(pkg) || has_uuid(pkg)
@@ -1385,9 +1373,9 @@ function registered_names(env::EnvCache, uuid::UUID)::Vector{String}
 end
 
 # Determine a single UUID for a given name, prompting if needed
-function registered_uuid(env::EnvCache, name::String)::UUID
+function registered_uuid(env::EnvCache, name::String)::Union{Nothing,UUID}
     uuids = registered_uuids(env, name)
-    length(uuids) == 0 && return UUID(zero(UInt128))
+    length(uuids) == 0 && return nothing
     length(uuids) == 1 && return uuids[1]
     choices::Vector{String} = []
     choices_cache::Vector{Tuple{UUID,String}} = []
@@ -1410,7 +1398,7 @@ function registered_uuid(env::EnvCache, name::String)::UUID
         # prompt for which UUID was intended:
         menu = RadioMenu(choices)
         choice = request("There are multiple registered `$name` packages, choose one:", menu)
-        choice == -1 && return UUID(zero(UInt128))
+        choice == -1 && return nothing
         env.paths[choices_cache[choice][1]] = [choices_cache[choice][2]]
         return choices_cache[choice][1]
     else
@@ -1446,7 +1434,7 @@ function registered_info(env::EnvCache, uuid::UUID, key::String)
 end
 
 # Find package by UUID in the manifest file
-# TODO this needs a better name now?
+manifest_info(env::EnvCache, uuid::Nothing) = nothing
 function manifest_info(env::EnvCache, uuid::UUID)::Union{PackageEntry,Nothing}
     uuid in values(env.uuids) || find_registered!(env, [uuid])
     return get(env.manifest, uuid, nothing)

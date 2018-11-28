@@ -162,9 +162,9 @@ function parse_package(word::AbstractString; add_or_develop=false)::PackageSpec
         if !occursin(Base.Filesystem.path_separator_re, word)
             @info "resolving package specifier `$word` as a directory at `$(Base.contractuser(abspath(word)))`."
         end
-        return PackageSpec(Types.GitRepo(url=expanduser(word)))
+        return PackageSpec(repo=Types.GitRepo(url=expanduser(word)))
     elseif occursin(uuid_re, word)
-        return PackageSpec(UUID(word))
+        return PackageSpec(uuid=UUID(word))
     elseif occursin(name_re, word)
         return PackageSpec(String(match(name_re, word).captures[1]))
     elseif occursin(name_uuid_re, word)
@@ -172,7 +172,7 @@ function parse_package(word::AbstractString; add_or_develop=false)::PackageSpec
         return PackageSpec(String(m.captures[1]), UUID(m.captures[2]))
     elseif add_or_develop
         # Guess it is a url then
-        return PackageSpec(Types.GitRepo(url=word))
+        return PackageSpec(repo=Types.GitRepo(url=word))
     else
         pkgerror("`$word` cannot be parsed as a package")
     end

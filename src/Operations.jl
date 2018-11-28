@@ -194,8 +194,8 @@ function collect_require!(ctx::Context, pkg::PackageSpec, path::String, fix_deps
 
     # And collect the stdlibs
     stdlibs = find_stdlib_deps(ctx, path)
-    for (uuid, stdlib) in stdlibs
-        deppkg = PackageSpec(stdlib, uuid, VersionSpec())
+    for (uuid, name) in stdlibs
+        deppkg = PackageSpec(name, uuid)
         push!(fix_deps_map[pkg.uuid], deppkg)
         push!(fix_deps, deppkg)
     end
@@ -734,14 +734,14 @@ function update_manifest(ctx::Context, pkg::PackageSpec, hash::Union{SHA1, Nothi
             # Remove when packages uses Project files properly
             dep_pkgs = PackageSpec[]
             stdlib_deps = find_stdlib_deps(ctx, path)
-            for (stdlib_uuid, stdlib) in stdlib_deps
-                push!(dep_pkgs, PackageSpec(stdlib, stdlib_uuid))
+            for (uuid, name) in stdlib_deps
+                push!(dep_pkgs, PackageSpec(name, uuid))
             end
             reqfile = joinpath(path, "REQUIRE")
             if isfile(reqfile)
                 for r in Pkg2.Reqs.read(reqfile)
                     r isa Pkg2.Reqs.Requirement || continue
-                    push!(dep_pkgs, PackageSpec(r.package))
+                    push!(dep_pkgs, PackageSpec(name=r.package))
                 end
                 registry_resolve!(env, dep_pkgs)
                 project_deps_resolve!(ctx.env, dep_pkgs)
@@ -809,8 +809,8 @@ function with_dependencies_loadable_at_toplevel(f, mainctx::Context, pkg::Packag
         entry === nothing && return
         need_to_resolve |= (entry.path !== nothing)
         localctx.env.project.deps[pkg.name] = pkg.uuid
-        for (dpkg, uuid) in entry.deps
-            collect_deps!(seen, PackageSpec(dpkg, uuid))
+        for (name, uuid) in entry.deps
+            collect_deps!(seen, PackageSpec(name, uuid))
         end
     end
 

@@ -32,7 +32,6 @@ add_or_develop(pkgs::Vector{PackageSpec}; kwargs...)      = add_or_develop(Conte
 function add_or_develop(ctx::Context, pkgs::Vector{PackageSpec}; mode::Symbol, shared::Bool=true, kwargs...)
     pkgs = deepcopy(pkgs)  # deepcopy for avoid mutating PackageSpec members
     Context!(ctx; kwargs...)
-
     # if julia is passed as a package the solver gets tricked;
     # this catches the error early on
     any(pkg -> (pkg.name == "julia"), pkgs) &&
@@ -103,11 +102,11 @@ function up(ctx::Context, pkgs::Vector{PackageSpec};
     if isempty(pkgs)
         if mode == PKGMODE_PROJECT
             for (name::String, uuid::UUID) in ctx.env.project.deps
-                push!(pkgs, PackageSpec(name, uuid, level))
+                push!(pkgs, PackageSpec(name=name, uuid=uuid, version=level))
             end
         elseif mode == PKGMODE_MANIFEST
             for (uuid, entry) in ctx.env.manifest
-                push!(pkgs, PackageSpec(entry.name, uuid, level))
+                push!(pkgs, PackageSpec(name=entry.name, uuid=uuid, version=level))
             end
         end
     else
@@ -445,8 +444,8 @@ function instantiate(ctx::Context; manifest::Union{Bool, Nothing}=nothing, kwarg
     urls = Dict{UUID,Vector{String}}()
     pkgs = PackageSpec[]
     for (uuid, entry) in ctx.env.manifest
-        pkg = PackageSpec(entry)
-        pkg.uuid = uuid
+        pkg = PackageSpec(name=entry.name, uuid=uuid, path=entry.path,
+                          version = entry.version !== nothing ? VersionNumber(entry.version) : VersionSpec())
         push!(pkgs, pkg)
         pkg.uuid in keys(ctx.stdlibs) && continue
         pkg.path !== nothing && continue
