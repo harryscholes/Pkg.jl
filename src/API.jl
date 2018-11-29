@@ -32,18 +32,16 @@ add_or_develop(pkgs::Vector{PackageSpec}; kwargs...)      = add_or_develop(Conte
 function add_or_develop(ctx::Context, pkgs::Vector{PackageSpec}; mode::Symbol, shared::Bool=true, kwargs...)
     pkgs = deepcopy(pkgs)  # deepcopy for avoid mutating PackageSpec members
     Context!(ctx; kwargs...)
-
     # if julia is passed as a package the solver gets tricked;
     # this catches the error early on
-    any(pkg->(pkg.name == "julia"), pkgs) &&
+    any(pkg -> (pkg.name == "julia"), pkgs) &&
         pkgerror("Trying to $mode julia as a package")
 
     ctx.preview && preview_info()
-    if mode == :develop
-        new_git = handle_repos_develop!(ctx, pkgs, shared = shared)
-    else
-        new_git = handle_repos_add!(ctx, pkgs; upgrade_or_add=true)
-    end
+    new_git = mode == :develop ?
+        handle_repos_develop!(ctx, pkgs, shared) :
+        handle_repos_add!(ctx, pkgs; upgrade_or_add=true)
+
     project_deps_resolve!(ctx.env, pkgs)
     registry_resolve!(ctx.env, pkgs)
     stdlib_resolve!(ctx, pkgs)
@@ -104,11 +102,11 @@ function up(ctx::Context, pkgs::Vector{PackageSpec};
     if isempty(pkgs)
         if mode == PKGMODE_PROJECT
             for (name::String, uuid::UUID) in ctx.env.project.deps
-                push!(pkgs, PackageSpec(name, uuid, level))
+                push!(pkgs, PackageSpec(name=name, uuid=uuid, version=level))
             end
         elseif mode == PKGMODE_MANIFEST
             for (uuid, entry) in ctx.env.manifest
-                push!(pkgs, PackageSpec(entry.name, uuid, level))
+                push!(pkgs, PackageSpec(name=entry.name, uuid=uuid, version=level))
             end
         end
     else
@@ -446,17 +444,14 @@ function instantiate(ctx::Context; manifest::Union{Bool, Nothing}=nothing, kwarg
     urls = Dict{UUID,Vector{String}}()
     pkgs = PackageSpec[]
     for (uuid, entry) in ctx.env.manifest
-        pkg = PackageSpec(entry)
-        pkg.uuid = uuid
+        pkg = PackageSpec(name=entry.name, uuid=uuid, path=entry.path,
+                          version = entry.version !== nothing ? VersionNumber(entry.version) : VersionSpec())
         push!(pkgs, pkg)
         pkg.uuid in keys(ctx.stdlibs) && continue
         pkg.path !== nothing && continue
         urls[pkg.uuid] = String[]
-        hashes[pkg.uuid] = entry.git_tree_sha
-
-        if entry.repo_url !== nothing
-            pkg.repo = Types.GitRepo(entry.repo_url, entry.repo_rev, entry.git_tree_sha)
-        end
+        hashes[pkg.uuid] = entry.repo.tree_sha
+        entry.repo.url !== nothing && (pkg.repo = entry.repo)
     end
     _, urls_ref = Operations.version_data!(ctx, pkgs)
     for (uuid, url) in urls_ref
